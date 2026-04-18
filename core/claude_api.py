@@ -1,11 +1,12 @@
 """
 Petacomm - Claude API Integration
-Converts natural language requests into server actions,
-runs commands, and explains output in human language.
+Two-turn pipeline: understands request → runs command → explains output.
+Supports interactive confirmation in the user's language.
 """
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -80,13 +81,13 @@ def _call_claude(messages: list, system: str, api_key: str, max_tokens: int = 10
 def _run_command(cmd: str) -> str:
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=15
+            cmd, shell=True, capture_output=True, text=True, timeout=30
         )
         out = result.stdout.strip()
         err = result.stderr.strip()
         return out if out else err
     except subprocess.TimeoutExpired:
-        return "Command timed out after 15 seconds."
+        return "Command timed out after 30 seconds."
     except Exception as e:
         return str(e)
 
@@ -121,12 +122,40 @@ Current system state:
 """
 
 
+def _detect_language(text: str, api_key: str) -> str:
+    """Detect the language of the user's request."""
+    result = _call_claude(
+        messages=[{"role": "user", "content": f"What language is this text written in? Reply with only the language name in English, nothing else. Text: {text}"}],
+        system="You are a language detector. Reply with only the language name in English (e.g. Turkish, English, German, French, Spanish). Nothing else.",
+        api_key=api_key,
+        max_tokens=10,
+    )
+    return result.get("text", "English").strip()
+
+
+def _confirmation_words(language: str) -> dict:
+    """Return yes/no words for a given language."""
+    words = {
+        "Turkish":    {"yes": ["evet", "e", "tamam", "ok"],    "no": ["hayır", "h", "iptal", "vazgeç"],    "prompt": "Onaylıyor musunuz? (Evet/Hayır)"},
+        "English":    {"yes": ["yes", "y", "ok", "sure"],      "no": ["no", "n", "cancel", "abort"],        "prompt": "Do you confirm? (Yes/No)"},
+        "German":     {"yes": ["ja", "j", "ok"],                "no": ["nein", "n", "abbrechen"],            "prompt": "Bestätigen Sie? (Ja/Nein)"},
+        "French":     {"yes": ["oui", "o", "ok"],               "no": ["non", "n", "annuler"],               "prompt": "Confirmez-vous? (Oui/Non)"},
+        "Spanish":    {"yes": ["sí", "si", "s", "ok"],          "no": ["no", "n", "cancelar"],               "prompt": "¿Confirma? (Sí/No)"},
+        "Italian":    {"yes": ["sì", "si", "s", "ok"],          "no": ["no", "n", "annulla"],                "prompt": "Confermi? (Sì/No)"},
+        "Portuguese": {"yes": ["sim", "s", "ok"],               "no": ["não", "nao", "n", "cancelar"],       "prompt": "Confirma? (Sim/Não)"},
+        "Russian":    {"yes": ["да", "д", "ok"],                "no": ["нет", "н", "отмена"],                "prompt": "Подтверждаете? (Да/Нет)"},
+        "Arabic":     {"yes": ["نعم", "ok"],                    "no": ["لا", "إلغاء"],                       "prompt": "هل تؤكد؟ (نعم/لا)"},
+        "Japanese":   {"yes": ["はい", "yes", "ok"],             "no": ["いいえ", "no"],                      "prompt": "確認しますか？(はい/いいえ)"},
+    }
+    return words.get(language, words["English"])
+
+
 def ask_claude(request: str, system_context: dict = None, api_key: str = None) -> dict:
     """
     Two-turn pipeline:
-    1. Claude decides what command to run
-    2. Command runs on the server
-    3. Claude explains the output in plain human language
+    1. Claude decides what to do (run command or ask confirmation)
+    2. If confirmation needed → ask user in their language → wait for answer
+    3. Run command → explain output in human language
     """
     key = api_key or get_api_key()
     if not key:
@@ -138,37 +167,36 @@ def ask_claude(request: str, system_context: dict = None, api_key: str = None) -
 
     context_str = _build_context(system_context)
 
-    # ── Turn 1: Decide what command to run ───────────────────────────────────
+    # Detect user's language
+    language = _detect_language(request, key)
+
+    # ── Turn 1: Decide what to do ─────────────────────────────────────────────
     turn1_system = f"""You are Petacomm, an AI-powered Linux server management assistant.
-Your job is to help users manage their Linux server using plain natural language.
+The user's language is: {language}. You MUST respond in {language}.
 
 {context_str}
 
 RULES:
-1. LANGUAGE: Always detect what language the user is writing in and respond in that exact same language.
-   Turkish → Turkish, English → English, German → German, etc.
+1. Always respond in {language} — this is critical.
 
-2. COMMANDS: When you need real data from the server, respond ONLY with this JSON and nothing else:
-   {{"run": "the shell command"}}
-   Examples:
-   {{"run": "df -h"}}
-   {{"run": "free -h"}}
-   {{"run": "ps aux --sort=-%cpu | head -20"}}
+2. To run a safe read-only command (ls, df, free, ps, top, etc.), output ONLY this JSON:
+   {{"run": "command here"}}
 
-3. DANGEROUS OPS: For destructive operations (rm, drop database, format), never run automatically.
-   Instead explain what will happen and ask for confirmation.
+3. For DANGEROUS or MODIFYING operations (apt upgrade, rm, systemctl restart, etc.):
+   - Explain what will happen in simple terms
+   - List the risks
+   - End your message with EXACTLY this JSON on the last line (nothing after it):
+   {{"confirm": "the exact command to run", "danger": "low|medium|high"}}
 
-4. BEGINNER FRIENDLY: Always explain technical terms simply.
-   Bad: "Your /dev/sda1 has 87% inode usage"
-   Good: "Your main hard drive is almost full (87% used)"
+4. If no command is needed, just answer directly in {language}.
 
-5. If no command is needed, answer directly in the user's language."""
+5. Always explain technical terms simply — the user may be a complete beginner."""
 
     turn1 = _call_claude(
         messages=[{"role": "user", "content": request}],
         system=turn1_system,
         api_key=key,
-        max_tokens=512,
+        max_tokens=768,
     )
 
     if not turn1["success"]:
@@ -176,58 +204,111 @@ RULES:
 
     turn1_text = turn1["text"].strip()
 
-    # Check if Claude wants to run a command
-    command_output = None
+    # ── Parse response ────────────────────────────────────────────────────────
     command_ran = None
+    command_output = None
+    confirmed = False
 
-    try:
-        import re
-        clean = turn1_text
-        # Strip markdown code blocks if present
-        if "```" in clean:
-            match = re.search(r'\{[^}]+\}', clean, re.DOTALL)
-            if match:
-                clean = match.group(0)
-        parsed = json.loads(clean)
-        if "run" in parsed:
-            command_ran = parsed["run"]
+    # Check for {"run": ...} — safe command, run immediately
+    run_match = re.search(r'\{"run"\s*:\s*"([^"]+)"\}', turn1_text)
+
+    # Check for {"confirm": ..., "danger": ...} — needs user confirmation
+    confirm_match = re.search(r'\{"confirm"\s*:\s*"([^"]+)"\s*,\s*"danger"\s*:\s*"([^"]+)"\}', turn1_text)
+
+    if run_match:
+        command_ran = run_match.group(1)
+        command_output = _run_command(command_ran)
+
+    elif confirm_match:
+        confirm_cmd = confirm_match.group(1)
+        danger = confirm_match.group(2)
+
+        # Show explanation (everything before the JSON)
+        explanation = turn1_text[:confirm_match.start()].strip()
+
+        # Get confirmation words in user's language
+        conf_words = _confirmation_words(language)
+
+        # Color for danger level
+        danger_colors = {"low": "\033[33m", "medium": "\033[33m", "high": "\033[31m"}
+        color = danger_colors.get(danger, "\033[33m")
+        reset = "\033[0m"
+
+        print()
+        print(f"\033[36m{'─' * 60}\033[0m")
+        if explanation:
+            print(explanation)
+            print()
+        print(f"{color}❯ {conf_words['prompt']}{reset} ", end="", flush=True)
+
+        try:
+            answer = input().strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return {
+                "success": True,
+                "response": "Cancelled." if language == "English" else "İptal edildi.",
+                "command_ran": None,
+                "command_output": None,
+                "error": None,
+            }
+
+        if answer in conf_words["yes"]:
+            confirmed = True
+            command_ran = confirm_cmd
             command_output = _run_command(command_ran)
-    except (json.JSONDecodeError, ValueError):
-        pass
+        else:
+            cancelled_msg = {
+                "Turkish": "İptal edildi.",
+                "English": "Cancelled.",
+                "German": "Abgebrochen.",
+                "French": "Annulé.",
+                "Spanish": "Cancelado.",
+            }
+            return {
+                "success": True,
+                "response": cancelled_msg.get(language, "Cancelled."),
+                "command_ran": None,
+                "command_output": None,
+                "error": None,
+            }
 
-    # ── Turn 2: Explain the output in human language ──────────────────────────
+    # ── Turn 2: Explain output ────────────────────────────────────────────────
     if command_output is not None:
         turn2_system = f"""You are Petacomm, an AI-powered Linux server management assistant.
+The user's language is: {language}. You MUST respond in {language}.
+
 {context_str}
 
+You just ran: `{command_ran}`
+Raw output:
+---
+{command_output}
+---
+
 RULES:
-1. LANGUAGE: The user wrote in a specific language. Respond in that EXACT same language.
-   Detect it from the user's original message and match it perfectly.
+1. Respond in {language} — absolutely required.
+2. Explain the output as if talking to a complete beginner who has never used Linux.
+3. Replace ALL technical terms with simple real-world analogies.
+4. Use ✅ for good things, ⚠️ for warnings, ❌ for problems.
+5. Show sizes in human-readable format (GB, MB — not bytes or kilobytes).
+6. If there's a problem, give simple next steps.
+7. Keep it friendly and concise."""
 
-2. You just ran: `{command_ran}`
-   Raw output:
-   ---
-   {command_output}
-   ---
+        messages = [
+            {"role": "user", "content": request},
+            {"role": "assistant", "content": turn1_text},
+            {"role": "user", "content": f"Command output:\n{command_output}"},
+        ]
 
-3. Explain this output as if talking to someone who has NEVER used Linux before.
-   - Replace ALL technical terms with simple explanations
-   - Use real-world analogies (hard drive = like a filing cabinet, RAM = like a desk workspace)
-   - Show what's ✅ good, ⚠️ needs attention, ❌ is a problem
-   - Format sizes in human readable form (GB, MB — not bytes)
-   - If there's a problem, tell them exactly what to do next in simple steps
-
-4. Structure:
-   - One sentence summary
-   - Breakdown of important items
-   - Next steps if needed (optional)"""
+        if confirmed:
+            messages.append({
+                "role": "assistant",
+                "content": f"The command `{command_ran}` was executed. Here is the output."
+            })
 
         turn2 = _call_claude(
-            messages=[
-                {"role": "user", "content": request},
-                {"role": "assistant", "content": turn1_text},
-                {"role": "user", "content": f"Here is the command output:\n{command_output}"},
-            ],
+            messages=messages,
             system=turn2_system,
             api_key=key,
             max_tokens=1024,
@@ -238,16 +319,30 @@ RULES:
 
         return {
             "success": True,
-            "response": turn2["text"],
+            "response": clean_markdown(turn2["text"]),
             "command_ran": command_ran,
             "command_output": command_output,
             "error": None,
         }
 
+    # Direct answer, no command
     return {
         "success": True,
-        "response": turn1_text,
+        "response": clean_markdown(turn1_text),
         "command_ran": None,
         "command_output": None,
         "error": None,
     }
+
+
+def clean_markdown(text: str) -> str:
+    """Remove markdown formatting for clean terminal output."""
+    import re
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\*{1,3}([^*\n]+)\*{1,3}', r'\1', text)
+    text = re.sub(r'_{1,3}([^_\n]+)_{1,3}', r'\1', text)
+    text = re.sub(r'[\x60]{3}[a-z]*\n?', '', text)
+    text = re.sub(r'[\x60]([^\x60\n]+)[\x60]', r'\1', text)
+    text = re.sub(r'^[-*_]{3,}\s*$', '─' * 40, text, flags=re.MULTILINE)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()

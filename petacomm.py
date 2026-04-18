@@ -376,7 +376,7 @@ def cmd_request(request: str, dry_run: bool = False):
         p.add_task("")
         sys_data = scanner.full_scan()
 
-    with Progress(SpinnerColumn(), TextColumn("[cyan]Claude'a soruluyor..."), transient=True) as p:
+    with Progress(SpinnerColumn(), TextColumn("[cyan]Working on it..."), transient=True) as p:
         p.add_task("")
         result = claude_api.ask_claude(request, system_context=sys_data, api_key=api_key)
 
