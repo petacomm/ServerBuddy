@@ -364,11 +364,11 @@ def cmd_find(query: str):
 
 
 def cmd_request(request: str, dry_run: bool = False):
-    """Claude API'ye doğal dil isteği gönder."""
+    """Send a natural language request to Claude AI."""
     api_key = claude_api.get_api_key()
     if not api_key:
-        console.print("[yellow]API key bulunamadı. Önce giriş yap:[/]")
-        console.print("  petacomm login")
+        console.print("[yellow]No API key found. Run: petacomm login[/]")
+        
         return
 
     # Önce sistemi tara
@@ -381,10 +381,15 @@ def cmd_request(request: str, dry_run: bool = False):
         result = claude_api.ask_claude(request, system_context=sys_data, api_key=api_key)
 
     if not result["success"]:
-        console.print(f"[red]Hata: {result['error']}[/]")
+        console.print(f"[red]Error: {result['error']}[/]")
         return
 
     console.print()
+
+    if result.get("command_ran"):
+        console.print(f"[dim]▸ Ran:[/] [yellow]{result['command_ran']}[/]")
+        console.print()
+
     console.print(Panel(
         result["response"],
         title=f"[cyan]Petacomm AI[/] [dim]— {request[:50]}[/]",
@@ -393,7 +398,7 @@ def cmd_request(request: str, dry_run: bool = False):
     ))
 
     if dry_run:
-        console.print("[dim][SİMÜLASYON MODU — Hiçbir şey çalıştırılmadı][/]")
+        console.print("[dim][DRY RUN — Nothing was executed][/]")
 
     console.print()
 
