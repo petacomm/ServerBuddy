@@ -58,7 +58,7 @@ petacomm config --model model_name  (example: petacomm config --model haiku) -> 
 
 ## API Key
 
-https://console.anthropic.com adresinden ücretsiz API key alabilirsin.
+You can get a free API key at https://console.anthropic.com.
 
 ```bash
 petacomm login
