@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
-Petacomm - Linux Server Yönetim Aracı
-Kullanım:
-    petacomm status                    → Sistem durumu
-    petacomm health                    → Sağlık skoru
-    petacomm ls services               → Servisleri listele
-    petacomm ls ports                  → Açık portlar
-    petacomm ls backups                → Yedekleri listele
-    petacomm ls processes              → Süreçleri listele
-    petacomm -r "isteğin"              → AI'ya sor
-    petacomm find "aranacak"           → Dosya ara
-    petacomm backup now                → Hemen yedek al
-    petacomm restore <isim>            → Yedeği geri yükle
-    petacomm login                     → API key gir
+Petacomm - Linux Server Management Tool
+Usage:
+    petacomm status                    -> System status
+    petacomm health                    -> Health score
+    petacomm ls services               -> List services
+    petacomm config --model modelname (ex: petacomm config --model opus) -> Configure LLM model
+    petacomm ls ports                  -> Open ports
+    petacomm ls backups                -> List backups
+    petacomm ls processes              -> List processes
+    petacomm -r "your request"         -> Ask AI
+    petacomm find "keyword"            -> Find and delete files
+    petacomm backup now                -> Take backup now
+    petacomm restore <name>            -> Restore backup
+    petacomm login                     -> Set API key
 """
 
 import sys
@@ -21,14 +22,12 @@ import re
 import getpass
 from pathlib import Path
 
-# Proje kökünü path'e ekle
 sys.path.insert(0, str(Path(__file__).parent))
 
 from core import scanner, executor, claude_api, backup
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
-from rich.text import Text
 from rich.prompt import Prompt, Confirm
 from rich import box
 from rich.columns import Columns
@@ -37,7 +36,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 console = Console()
 
 
-# ─── Renk yardımcıları ───────────────────────────────────────────────────────
+# ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def risk_color(level: str) -> str:
     return {"green": "bright_green", "yellow": "yellow", "red": "red"}.get(level, "white")
@@ -59,26 +58,23 @@ def status_icon(active: bool, status: str = "") -> str:
     return "[dim]○[/]"
 
 
-# ─── Komutlar ────────────────────────────────────────────────────────────────
+# ─── Commands ─────────────────────────────────────────────────────────────────
 
 def cmd_status():
-    """Sistem genel durumunu göster."""
-    with Progress(SpinnerColumn(), TextColumn("[cyan]Sistem taranıyor..."), transient=True) as p:
+    with Progress(SpinnerColumn(), TextColumn("[cyan]Scanning system..."), transient=True) as p:
         p.add_task("")
         data = scanner.full_scan()
 
     h = data["health"]
     score_color = {"iyi": "bright_green", "dikkat": "yellow", "kritik": "red"}.get(h["level"], "white")
 
-    # Başlık
     console.print()
     console.print(Panel(
-        f"[bold cyan]Petacomm[/] — Linux Server Yönetim Aracı\n"
+        f"[bold cyan]Petacomm[/] — Linux Server Management Tool\n"
         f"[dim]{data['scanned_at']}[/]",
         border_style="cyan", padding=(0, 2)
     ))
 
-    # Sistem bilgisi + sağlık skoru yan yana
     info = Table(box=None, show_header=False, padding=(0, 2))
     info.add_column(style="dim", width=16)
     info.add_column()
@@ -92,14 +88,13 @@ def cmd_status():
 
     score_panel = Panel(
         f"\n[{score_color} bold]{h['score']}[/][dim]/100[/]\n\n[{score_color}]{h['level'].upper()}[/]\n",
-        title="Sağlık Skoru", border_style=score_color, width=20
+        title="Health Score", border_style=score_color, width=20
     )
 
     console.print(Columns([info, score_panel]))
 
-    # Kaynaklar
     console.print()
-    console.print("[bold]Kaynaklar[/]")
+    console.print("[bold]Resources[/]")
     res = Table(box=box.SIMPLE, show_header=False, padding=(0, 1))
     res.add_column(style="dim", width=6)
     res.add_column(width=30)
@@ -113,7 +108,6 @@ def cmd_status():
                     f"[dim]{scanner.fmt_bytes(disk['used'])} / {scanner.fmt_bytes(disk['total'])}[/]")
     console.print(res)
 
-    # Uyarılar
     if h["criticals"]:
         console.print()
         for c in h["criticals"]:
@@ -122,21 +116,19 @@ def cmd_status():
         for w in h["warnings"]:
             console.print(f"  [yellow]🟡 {w}[/]")
 
-    # Servisler özet
     active_svcs = [s for s in data["services"] if s["active"]]
     failed_svcs = [s for s in data["services"] if s["status"] == "failed"]
     console.print()
     console.print(
-        f"[dim]Servisler:[/] "
-        f"[bright_green]{len(active_svcs)} çalışıyor[/]"
-        + (f"  [red]{len(failed_svcs)} hatalı[/]" if failed_svcs else "")
+        f"[dim]Services:[/] "
+        f"[bright_green]{len(active_svcs)} running[/]"
+        + (f"  [red]{len(failed_svcs)} failed[/]" if failed_svcs else "")
     )
     console.print()
 
 
 def cmd_health():
-    """Detaylı sağlık raporu."""
-    with Progress(SpinnerColumn(), TextColumn("[cyan]Analiz ediliyor..."), transient=True) as p:
+    with Progress(SpinnerColumn(), TextColumn("[cyan]Analyzing..."), transient=True) as p:
         p.add_task("")
         data = scanner.full_scan()
 
@@ -145,38 +137,35 @@ def cmd_health():
 
     console.print()
     console.print(Panel(
-        f"[{score_color} bold]Sağlık Skoru: {h['score']}/100 — {h['level'].upper()}[/]",
+        f"[{score_color} bold]Health Score: {h['score']}/100 — {h['level'].upper()}[/]",
         border_style=score_color
     ))
 
     if not h["criticals"] and not h["warnings"]:
-        console.print("[bright_green]✓ Sistem sağlıklı görünüyor, sorun tespit edilmedi.[/]")
+        console.print("[bright_green]✓ System looks healthy, no issues detected.[/]")
     else:
         if h["criticals"]:
-            console.print("\n[bold red]Kritik Sorunlar:[/]")
+            console.print("\n[bold red]Critical Issues:[/]")
             for c in h["criticals"]:
                 console.print(f"  🔴 {c}")
         if h["warnings"]:
-            console.print("\n[bold yellow]Uyarılar:[/]")
+            console.print("\n[bold yellow]Warnings:[/]")
             for w in h["warnings"]:
                 console.print(f"  🟡 {w}")
-
     console.print()
 
 
 def cmd_ls(target: str):
-    """Listele: services, ports, backups, processes."""
-
-    if target in ("services", "servisler", "service"):
-        with Progress(SpinnerColumn(), TextColumn("[cyan]Servisler taranıyor..."), transient=True) as p:
+    if target in ("services", "service"):
+        with Progress(SpinnerColumn(), TextColumn("[cyan]Scanning services..."), transient=True) as p:
             p.add_task("")
             services = scanner.get_services()
 
         console.print()
-        t = Table(title="Servisler", box=box.ROUNDED, border_style="cyan")
-        t.add_column("Durum", width=4)
-        t.add_column("Servis", style="bold")
-        t.add_column("Durum", width=12)
+        t = Table(title="Services", box=box.ROUNDED, border_style="cyan")
+        t.add_column("", width=4)
+        t.add_column("Service", style="bold")
+        t.add_column("Status", width=12)
         for s in services:
             t.add_row(
                 status_icon(s["active"], s["status"]),
@@ -188,55 +177,48 @@ def cmd_ls(target: str):
         console.print(t)
 
     elif target in ("ports", "port"):
-        with Progress(SpinnerColumn(), TextColumn("[cyan]Portlar taranıyor..."), transient=True) as p:
+        with Progress(SpinnerColumn(), TextColumn("[cyan]Scanning ports..."), transient=True) as p:
             p.add_task("")
             ports = scanner.get_open_ports()
 
         console.print()
-        t = Table(title="Açık Portlar", box=box.ROUNDED, border_style="cyan")
+        t = Table(title="Open Ports", box=box.ROUNDED, border_style="cyan")
         t.add_column("Port", style="yellow", width=8)
-        t.add_column("Servis")
+        t.add_column("Service")
         for p in ports:
             t.add_row(str(p["port"]), p["service"] or "—")
         console.print(t)
 
-    elif target in ("backups", "backup", "yedek", "yedekler"):
+    elif target in ("backups", "backup"):
         backups = backup.list_backups()
         console.print()
         if not backups:
-            console.print("[dim]Henüz yedek yok.[/]")
+            console.print("[dim]No backups yet.[/]")
             return
-        t = Table(title="Yedekler", box=box.ROUNDED, border_style="cyan")
+        t = Table(title="Backups", box=box.ROUNDED, border_style="cyan")
         t.add_column("#", width=4, style="dim")
-        t.add_column("Ad")
-        t.add_column("Tarih", style="dim")
-        t.add_column("Dosya", width=7, justify="right")
-        t.add_column("Boyut", width=10, justify="right")
+        t.add_column("Name")
+        t.add_column("Date", style="dim")
+        t.add_column("Files", width=7, justify="right")
+        t.add_column("Size", width=10, justify="right")
         for i, b in enumerate(backups, 1):
             t.add_row(str(i), b["name"], b["created_at"], str(b["files"]), b["size"])
         console.print(t)
 
-    elif target in ("processes", "process", "ps", "süreçler"):
-        with Progress(SpinnerColumn(), TextColumn("[cyan]Süreçler alınıyor..."), transient=True) as p:
+    elif target in ("processes", "process", "ps"):
+        with Progress(SpinnerColumn(), TextColumn("[cyan]Getting processes..."), transient=True) as p:
             p.add_task("")
             out = executor.run_command("ps aux --sort=-%cpu | head -20")
 
         console.print()
-        console.print(Panel(out["output"], title="En Yoğun 20 Süreç", border_style="cyan"))
-
-    elif target in ("logs", "log"):
-        console.print()
-        console.print("[dim]Hangi log? Örnek:[/]")
-        console.print("  petacomm logs nginx")
-        console.print("  petacomm logs system")
+        console.print(Panel(out["output"], title="Top 20 Processes", border_style="cyan"))
 
     else:
-        console.print(f"[yellow]Bilinmeyen hedef: {target}[/]")
-        console.print("[dim]Kullanılabilir: services, ports, backups, processes[/]")
+        console.print(f"[yellow]Unknown target: {target}[/]")
+        console.print("[dim]Available: services, ports, backups, processes[/]")
 
 
 def cmd_logs(target: str, follow: bool = False):
-    """Log dosyasını göster."""
     log_map = {
         "nginx": "/var/log/nginx/error.log",
         "apache": "/var/log/apache2/error.log",
@@ -245,110 +227,96 @@ def cmd_logs(target: str, follow: bool = False):
         "auth": "/var/log/auth.log",
         "kern": "/var/log/kern.log",
     }
-
     log_file = log_map.get(target, f"/var/log/{target}.log")
 
     if follow:
-        console.print(f"[dim]Canlı log: {log_file} (Ctrl+C ile çık)[/]")
+        console.print(f"[dim]Live log: {log_file} (Ctrl+C to exit)[/]")
         os.execlp("tail", "tail", "-f", log_file)
     else:
         out = executor.run_command(f"tail -50 {log_file}")
         if out["success"]:
             console.print(Panel(out["output"], title=f"Log: {log_file}", border_style="cyan"))
         else:
-            console.print(f"[red]Log okunamadı: {log_file}[/]")
-            console.print(f"[dim]{out['output']}[/]")
+            console.print(f"[red]Cannot read log: {log_file}[/]")
 
 
 def cmd_find(query: str):
-    """Dosya ara, numaralı listele, seçili olanları sil."""
     console.print()
-    with Progress(SpinnerColumn(), TextColumn(f"[cyan]'{query}' aranıyor..."), transient=True) as p:
+    with Progress(SpinnerColumn(), TextColumn(f"[cyan]Searching '{query}'..."), transient=True) as p:
         p.add_task("")
         results = executor.find_files(query)
 
     if not results:
-        console.print(f"[dim]'{query}' ile eşleşen dosya bulunamadı.[/]")
+        console.print(f"[dim]No files found matching '{query}'.[/]")
         return
 
-    # Listele
     t = Table(box=box.SIMPLE, show_header=True)
     t.add_column("#", width=4, style="dim")
-    t.add_column("Tür", width=7)
-    t.add_column("Yol")
-    t.add_column("Boyut", width=10, justify="right", style="dim")
+    t.add_column("Type", width=7)
+    t.add_column("Path")
+    t.add_column("Size", width=10, justify="right", style="dim")
 
     for r in results:
         icon = "📁" if r["is_dir"] else "📄"
         t.add_row(str(r["num"]), icon + " " + r["type"], r["path"], r["size_fmt"])
 
     console.print(t)
-    console.print(f"[dim]{len(results)} sonuç bulundu.[/]")
+    console.print(f"[dim]{len(results)} results found.[/]")
     console.print()
 
-    # Silmek istiyor mu?
-    console.print("[dim]Silmek istediklerini yaz (örn: delete 1,2,3) ya da Enter ile çık:[/]")
+    console.print("[dim]Type which to delete (e.g: delete 1,2,3) or Enter to exit:[/]")
     choice = Prompt.ask("", default="")
 
     if not choice.lower().startswith("delete"):
         return
 
-    # Seçimleri parse et
     nums_str = choice.lower().replace("delete", "").strip()
     try:
         nums = [int(n.strip()) for n in nums_str.split(",") if n.strip().isdigit()]
     except Exception:
-        console.print("[red]Geçersiz format.[/]")
+        console.print("[red]Invalid format.[/]")
         return
 
     selected = [r for r in results if r["num"] in nums]
     if not selected:
-        console.print("[dim]Hiçbir öğe seçilmedi.[/]")
+        console.print("[dim]No items selected.[/]")
         return
 
-    # Özet göster
     console.print()
-    console.print("[bold]Silinecekler:[/]")
+    console.print("[bold]Will be deleted:[/]")
     total_size = 0
     for item in selected:
         risk = executor.risk_check(f"rm {'-rf' if item['is_dir'] else ''} {item['path']}")
         color = risk_color(risk["level"])
-        console.print(
-            f"  [{color}]{'🔴' if risk['level'] == 'red' else '🟡' if risk['level'] == 'yellow' else '🟢'}[/] "
-            f"{item['path']}  [dim]{item['size_fmt']}[/]"
-        )
+        console.print(f"  [{color}]{'🔴' if risk['level'] == 'red' else '🟡' if risk['level'] == 'yellow' else '🟢'}[/] {item['path']}  [dim]{item['size_fmt']}[/]")
         total_size += item["size"]
 
-    console.print(f"\n[dim]Toplam: {executor.fmt_size(total_size)}[/]")
+    console.print(f"\n[dim]Total: {executor.fmt_size(total_size)}[/]")
+    console.print()
+    console.print("[bold]Are you sure?[/]")
+    console.print("  [bright_green]Y[/]  → Delete")
+    console.print("  [red]N[/]  → Cancel")
+    console.print("  [cyan]B[/]  → Backup then delete")
     console.print()
 
-    # Onay
-    console.print("[bold]Emin misin?[/]")
-    console.print("  [bright_green]Y[/]  → Sil")
-    console.print("  [red]N[/]  → İptal")
-    console.print("  [cyan]B[/]  → Yedekle sonra sil")
-    console.print()
-
-    ans = Prompt.ask("Seçim", choices=["Y", "y", "N", "n", "B", "b"], default="N")
+    ans = Prompt.ask("Choice", choices=["Y", "y", "N", "n", "B", "b"], default="N")
 
     if ans.upper() == "N":
-        console.print("[dim]İptal edildi.[/]")
+        console.print("[dim]Cancelled.[/]")
         return
 
     backup_dir = None
     if ans.upper() == "B":
-        # Yedek al
-        with Progress(SpinnerColumn(), TextColumn("[cyan]Yedekleniyor..."), transient=True) as p:
+        with Progress(SpinnerColumn(), TextColumn("[cyan]Backing up..."), transient=True) as p:
             p.add_task("")
             bk = backup.create_backup([r["path"] for r in selected], label=query)
         if bk["success"]:
-            console.print(f"[bright_green]✓ Yedek alındı → {bk['backup_path']}[/]")
+            console.print(f"[bright_green]✓ Backup saved → {bk['backup_path']}[/]")
             backup_dir = bk["backup_path"]
         else:
-            console.print("[red]Yedekleme başarısız! Silme iptal edildi.[/]")
+            console.print("[red]Backup failed! Delete cancelled.[/]")
             return
 
-    # Sil
     console.print()
     result = executor.delete_items(selected, backup_dir)
 
@@ -358,9 +326,9 @@ def cmd_find(query: str):
         console.print(f"[red]✗[/] {fail['path']} — {fail['error']}")
 
     if result["success"]:
-        console.print(f"\n[bright_green]✓ {len(result['success'])} öğe silindi.[/]")
+        console.print(f"\n[bright_green]✓ {len(result['success'])} items deleted.[/]")
         if backup_dir:
-            console.print(f"[dim]Geri almak için: petacomm restore {Path(backup_dir).name}[/]")
+            console.print(f"[dim]To restore: petacomm restore {Path(backup_dir).name}[/]")
 
 
 def cmd_request(request: str, dry_run: bool = False):
@@ -368,17 +336,46 @@ def cmd_request(request: str, dry_run: bool = False):
     api_key = claude_api.get_api_key()
     if not api_key:
         console.print("[yellow]No API key found. Run: petacomm login[/]")
-        
         return
 
-    # Önce sistemi tara
-    with Progress(SpinnerColumn(), TextColumn("[cyan]Sistem taranıyor..."), transient=True) as p:
+    # Test API key first
+    with Progress(SpinnerColumn(), TextColumn("[cyan]Connecting to AI..."), transient=True) as p:
+        p.add_task("")
+        test = claude_api.test_api_key(api_key)
+
+    if not test["success"]:
+        console.print(f"[red]API key error: {test['error']}[/]")
+        console.print("[dim]Run 'petacomm login' to update your API key.[/]")
+        return
+
+    # Scan system
+    with Progress(SpinnerColumn(), TextColumn("[cyan]Scanning system..."), transient=True) as p:
         p.add_task("")
         sys_data = scanner.full_scan()
 
-    with Progress(SpinnerColumn(), TextColumn("[cyan]Working on it..."), transient=True) as p:
-        p.add_task("")
-        result = claude_api.ask_claude(request, system_context=sys_data, api_key=api_key)
+    import threading, sys, time
+    model_name = claude_api.get_model_display_name()
+    result_box = {}
+    done = threading.Event()
+
+    def run_ai():
+        result_box["result"] = claude_api.ask_claude(request, system_context=sys_data, api_key=api_key)
+        done.set()
+
+    thread = threading.Thread(target=run_ai, daemon=True)
+    thread.start()
+
+    frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+    i = 0
+    while not done.is_set():
+        sys.stdout.write(f"\r\033[36m{frames[i % len(frames)]} Working on it... [{model_name}]\033[0m  ")
+        sys.stdout.flush()
+        time.sleep(0.1)
+        i += 1
+    sys.stdout.write("\r" + " " * 50 + "\r")
+    sys.stdout.flush()
+
+    result = result_box["result"]
 
     if not result["success"]:
         console.print(f"[red]Error: {result['error']}[/]")
@@ -404,18 +401,18 @@ def cmd_request(request: str, dry_run: bool = False):
 
 
 def cmd_backup(action: str, target: str = ""):
-    if action in ("now", "al", "create"):
+    if action in ("now", "create"):
         paths = [target] if target else [str(Path.home())]
-        with Progress(SpinnerColumn(), TextColumn("[cyan]Yedekleniyor..."), transient=True) as p:
+        with Progress(SpinnerColumn(), TextColumn("[cyan]Backing up..."), transient=True) as p:
             p.add_task("")
             result = backup.create_backup(paths, label=target or "manual")
 
         if result["success"]:
-            console.print(f"[bright_green]✓ Yedek alındı → {result['backup_path']}[/]")
+            console.print(f"[bright_green]✓ Backup saved → {result['backup_path']}[/]")
         else:
-            console.print("[red]Yedekleme başarısız.[/]")
+            console.print("[red]Backup failed.[/]")
     else:
-        console.print(f"[yellow]Bilinmeyen backup komutu: {action}[/]")
+        console.print(f"[yellow]Unknown backup command: {action}[/]")
 
 
 def cmd_restore(name: str):
@@ -423,71 +420,120 @@ def cmd_restore(name: str):
     names = [b["name"] for b in backups]
 
     if name not in names:
-        console.print(f"[red]Yedek bulunamadı: {name}[/]")
-        console.print("[dim]Mevcut yedekler: petacomm ls backups[/]")
+        console.print(f"[red]Backup not found: {name}[/]")
+        console.print("[dim]Available backups: petacomm ls backups[/]")
         return
 
-    if not Confirm.ask(f"'{name}' yedeği geri yüklenecek. Emin misin?"):
+    if not Confirm.ask(f"Restore backup '{name}'?"):
         return
 
-    with Progress(SpinnerColumn(), TextColumn("[cyan]Geri yükleniyor..."), transient=True) as p:
+    with Progress(SpinnerColumn(), TextColumn("[cyan]Restoring..."), transient=True) as p:
         p.add_task("")
         result = backup.restore_backup(name)
 
     if result["success"]:
         for r in result["restored"]:
             console.print(f"[bright_green]✓[/] {r}")
-        console.print(f"\n[bright_green]✓ Geri yükleme tamamlandı.[/]")
+        console.print(f"\n[bright_green]✓ Restore complete.[/]")
     else:
-        console.print(f"[red]Hata: {result.get('error', 'Bilinmeyen hata')}[/]")
+        console.print(f"[red]Error: {result.get('error', 'Unknown error')}[/]")
 
 
 def cmd_login():
-    """API key kaydet."""
     console.print()
     console.print(Panel(
-        "[bold]Claude API Key Girişi[/]\n\n"
-        "API key almak için:\n"
+        "[bold]Claude API Key Setup[/]\n\n"
+        "Get your API key at:\n"
         "  [cyan]https://console.anthropic.com[/]\n\n"
-        "[dim]Key güvenli şekilde ~/.petacomm/config.json dosyasına kaydedilir.[/]",
+        "[dim]Key is saved to ~/.petacomm/config.json[/]",
         border_style="cyan"
     ))
     console.print()
 
     key = getpass.getpass("API Key (sk-ant-...): ")
     if not key.startswith("sk-"):
-        console.print("[yellow]Uyarı: Geçersiz format gibi görünüyor. Yine de kaydedildi.[/]")
+        console.print("[yellow]Warning: Unusual format, but saving anyway.[/]")
 
-    claude_api.set_api_key(key.strip())
-    console.print("[bright_green]✓ API key kaydedildi.[/]")
+    # Test the key
+    console.print("[dim]Testing API key...[/]")
+    test = claude_api.test_api_key(key.strip())
+    if test["success"]:
+        claude_api.set_api_key(key.strip())
+        console.print("[bright_green]✓ API key is valid and saved.[/]")
+    else:
+        console.print(f"[red]API key test failed: {test['error']}[/]")
+        console.print("[yellow]Key not saved. Please check and try again.[/]")
     console.print()
+
+
+def cmd_config(args):
+    """Show or change configuration."""
+    from core.claude_api import get_model, set_model, MODELS, get_api_key
+
+    if not args:
+        # Show current config
+        model = get_model()
+        api_key = get_api_key()
+        console.print()
+        console.print(Panel(
+            f"[bold]Current Configuration[/]\n\n"
+            f"[dim]Model:[/]    [cyan]{model['name']}[/]\n"
+            f"[dim]API Key:[/]  [green]{'✓ Set' if api_key else '✗ Not set'}[/]\n",
+            border_style="cyan", title="petacomm config"
+        ))
+        console.print("[dim]Available models:[/]")
+        for key, m in MODELS.items():
+            marker = " ← current" if m["id"] == model["id"] else ""
+            console.print(f"  [yellow]{key}[/]  {m['name']}{marker}")
+        console.print()
+        console.print("[dim]Usage: petacomm config --model sonnet|opus|haiku[/]")
+        console.print()
+        return
+
+    if "--model" in args:
+        idx = args.index("--model")
+        if idx + 1 < len(args):
+            model_key = args[idx + 1].lower()
+            if set_model(model_key):
+                model = get_model()
+                console.print(f"[bright_green]✓ Model changed to: {model['name']}[/]")
+            else:
+                console.print(f"[red]Unknown model: {model_key}[/]")
+                console.print("[dim]Available: sonnet, opus, haiku[/]")
+        else:
+            console.print("[red]Usage: petacomm config --model sonnet|opus|haiku[/]")
+
+    elif "--show" in args:
+        cmd_config([])
 
 
 def cmd_help():
     console.print()
     console.print(Panel(
-        "[bold cyan]Petacomm[/] — Linux Server Yönetim Aracı\n\n"
-        "[bold]Komutlar:[/]\n"
-        "  [yellow]petacomm status[/]              Sistem durumu\n"
-        "  [yellow]petacomm health[/]              Sağlık skoru\n"
-        "  [yellow]petacomm ls services[/]         Servisleri listele\n"
-        "  [yellow]petacomm ls ports[/]            Açık portları listele\n"
-        "  [yellow]petacomm ls backups[/]          Yedekleri listele\n"
-        "  [yellow]petacomm ls processes[/]        Süreçleri listele\n"
-        "  [yellow]petacomm logs nginx[/]          Nginx loglarını göster\n"
-        "  [yellow]petacomm logs nginx --follow[/] Canlı log takibi\n"
-        "  [yellow]petacomm find \"kelime\"[/]       Dosya ara ve sil\n"
-        "  [yellow]petacomm backup now[/]          Hemen yedek al\n"
-        "  [yellow]petacomm restore <isim>[/]      Yedeği geri yükle\n"
-        "  [yellow]petacomm -r \"isteğin\"[/]        AI'ya sor (Claude)\n"
-        "  [yellow]petacomm --dry-run -r \"..\"[/]   Simüle et, çalıştırma\n"
-        "  [yellow]petacomm login[/]               API key gir\n"
-        "  [yellow]petacomm help[/]                Bu yardım\n",
+        "[bold cyan]Petacomm[/] — Linux Server Management Tool\n\n"
+        "[bold]Commands:[/]\n"
+        "  [yellow]petacomm status[/]              System status\n"
+        "  [yellow]petacomm health[/]              Health score\n"
+        "  [yellow]petacomm ls services[/]         List services\n"
+        "  [yellow]petacomm ls ports[/]            List open ports\n"
+        "  [yellow]petacomm ls backups[/]          List backups\n"
+        "  [yellow]petacomm ls processes[/]        List processes\n"
+        "  [yellow]petacomm logs nginx[/]          Show nginx logs\n"
+        "  [yellow]petacomm logs nginx --follow[/] Live log stream\n"
+        "  [yellow]petacomm find \"keyword\"[/]      Find and delete files\n"
+        "  [yellow]petacomm backup now[/]          Take backup now\n"
+        "  [yellow]petacomm restore <name>[/]      Restore a backup\n"
+        "  [yellow]petacomm -r \"your request\"[/]   Ask AI (Claude)\n"
+        "  [yellow]petacomm --dry-run -r \"..\"[/]   Simulate, don't run\n"
+        "  [yellow]petacomm login[/]               Set API key\n"
+        "  [yellow]petacomm help[/]                This help\n"
+        "  [yellow]petacomm config[/]              Monitor available models\n"
+        "  [yellow]petacomm configure--model modelname[/]    Configure LLM model (ex: petacomm configure --model haiku)\n",
         border_style="cyan", padding=(1, 2)
     ))
 
 
-# ─── Ana giriş noktası ────────────────────────────────────────────────────────
+# ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
     args = sys.argv[1:]
@@ -501,12 +547,11 @@ def main():
 
     cmd = args[0]
 
-    # petacomm -r "istek"
     if cmd == "-r":
         request = " ".join(args[1:])
         if not request:
-            console.print("[red]Hata: İstek boş.[/]")
-            console.print("[dim]Örnek: petacomm -r \"nginx neden çalışmıyor\"[/]")
+            console.print("[red]Error: Empty request.[/]")
+            console.print("[dim]Example: petacomm -r \"why is nginx not running\"[/]")
             return
         cmd_request(request, dry_run=dry_run)
 
@@ -519,8 +564,8 @@ def main():
     elif cmd == "ls":
         target = args[1] if len(args) > 1 else ""
         if not target:
-            console.print("[yellow]Ne listelensin?[/]")
-            console.print("[dim]Örnek: petacomm ls services[/]")
+            console.print("[yellow]What to list?[/]")
+            console.print("[dim]Example: petacomm ls services[/]")
         else:
             cmd_ls(target)
 
@@ -532,8 +577,8 @@ def main():
     elif cmd == "find":
         query = " ".join(args[1:])
         if not query:
-            console.print("[red]Hata: Arama terimi gerekli.[/]")
-            console.print("[dim]Örnek: petacomm find \"gatebell\"[/]")
+            console.print("[red]Error: Search term required.[/]")
+            console.print("[dim]Example: petacomm find \"gatebell\"[/]")
         else:
             cmd_find(query)
 
@@ -545,20 +590,23 @@ def main():
     elif cmd == "restore":
         name = args[1] if len(args) > 1 else ""
         if not name:
-            console.print("[red]Hata: Yedek adı gerekli.[/]")
-            console.print("[dim]Örnek: petacomm restore 2026-04-17_09-22-00[/]")
+            console.print("[red]Error: Backup name required.[/]")
+            console.print("[dim]Example: petacomm restore 2026-04-17_09-22-00[/]")
         else:
             cmd_restore(name)
 
     elif cmd == "login":
         cmd_login()
 
+    elif cmd == "config":
+        cmd_config(args[1:] if len(args) > 1 else [])
+
     elif cmd in ("help", "--help", "-h"):
         cmd_help()
 
     else:
-        console.print(f"[yellow]Bilinmeyen komut: {cmd}[/]")
-        console.print("[dim]Yardım için: petacomm help[/]")
+        console.print(f"[yellow]Unknown command: {cmd}[/]")
+        console.print("[dim]For help: petacomm help[/]")
 
 
 if __name__ == "__main__":
