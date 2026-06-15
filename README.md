@@ -1,55 +1,59 @@
 # Petacomm
 
-Linux sunucunu doğal dille yönet. AI destekli terminal aracı.
+Manage your Linux server using natural language. An AI-powered terminal tool.
 
-## Kurulum
+## Installation
 
 ```bash
 pip install rich psutil
 python petacomm.py help
 ```
 
-Ya da global olarak kullanmak için:
+Or to use globally:
 
 ```bash
 pip install -e .
 petacomm help
 ```
 
-## Kullanım
+## Usage
 
 ```bash
-# Sistem durumu
+# System status
 petacomm status
 
-# Sağlık skoru
+# Health score
 petacomm health
 
-# Listele
+# List
 petacomm ls services
 petacomm ls ports
 petacomm ls backups
 petacomm ls processes
 
-# Loglar
+# Logs
 petacomm logs nginx
 petacomm logs nginx --follow
 
-# Dosya ara ve sil
+# Search and delete files
 petacomm find "gatebell"
 
-# Yedekleme
+# Backup
 petacomm backup now
 petacomm restore 2026-04-17_09-22-00
 
-# AI isteği (Claude API gerekir)
+# AI Request (Requires Claude API)
 petacomm login
-petacomm -r "nginx neden çalışmıyor"
-petacomm -r "disk neden dolu, temizle"
-petacomm -r "güvenlik açığı var mı"
+petacomm -r "why isn't nginx working"
+petacomm -r "why is the disk full, clean it"
+petacomm -r "are there any security vulnerabilities"
 
-# Simülasyon modu (çalıştırmadan göster)
-petacomm --dry-run -r "mysql'i yeniden başlat"
+# Simulation (Show but don't run it)
+petacomm --dry-run -r "restart mysql"
+
+# LLM Configuration
+petacomm config (Shows you available AI Models)
+petacomm config --model model_name  (example: petacomm config --model haiku) -> it changes current AI model to selected one.
 ```
 
 ## API Key
@@ -58,7 +62,7 @@ https://console.anthropic.com adresinden ücretsiz API key alabilirsin.
 
 ```bash
 petacomm login
-# sk-ant-... şeklinde key'ini gir
+# sk-ant-... enter your api key
 ```
 
-Key `~/.petacomm/config.json` dosyasına kaydedilir.
+It is saved to the `~/.petacomm/config.json` file.
