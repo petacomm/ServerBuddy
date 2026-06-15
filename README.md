@@ -1,4 +1,4 @@
-# Petacomm
+# Petacomm Easy
 
 Manage your Linux server using natural language. An AI-powered terminal tool.
 
